@@ -2,4 +2,10 @@
 #
 # profiles = xccdf_org.ssgproject.content_profile_ospp
 
-sed -i "/^gpgcheck.*/d" /etc/yum.conf
+if which dnf ; then
+	config_file="/etc/dnf/dnf.conf"
+else
+	config_file="/etc/yum.conf"
+fi
+
+sed -i "/^gpgcheck.*/d" "$config_file"
