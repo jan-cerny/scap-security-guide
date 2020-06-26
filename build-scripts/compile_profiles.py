@@ -7,6 +7,7 @@ from glob import glob
 
 import ssg.build_yaml
 
+
 def create_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("profile_file", nargs="*")
