@@ -16,6 +16,7 @@ from .constants import STIG_PLATFORM_ID_MAP
 from .constants import XCCDF_REFINABLE_PROPERTIES
 from .rules import get_rule_dir_id, get_rule_dir_yaml, is_rule_dir
 from .rule_yaml import parse_prodtype
+from .controls import Control
 
 from .checks import is_cce_format_valid, is_cce_value_valid
 from .yaml import DocumentationNotComplete, open_and_expand, open_and_macro_expand
@@ -111,7 +112,17 @@ class Profile(object):
         self.unselected = []
         self.variables = dict()
         self.refine_rules = defaultdict(list)
-        self.policies = {}
+
+    def read_yaml_contents(self, yaml_contents):
+        self.title = required_key(yaml_contents, "title")
+        del yaml_contents["title"]
+        self.description = required_key(yaml_contents, "description")
+        del yaml_contents["description"]
+        self.extends = yaml_contents.pop("extends", None)
+        selection_entries = required_key(yaml_contents, "selections")
+        if selection_entries:
+            self._parse_selections(selection_entries)
+        del yaml_contents["selections"]
 
     @classmethod
     def from_yaml(cls, yaml_file, env_yaml=None):
@@ -122,18 +133,7 @@ class Profile(object):
         basename, _ = os.path.splitext(os.path.basename(yaml_file))
 
         profile = cls(basename)
-        profile.title = required_key(yaml_contents, "title")
-        del yaml_contents["title"]
-        profile.description = required_key(yaml_contents, "description")
-        del yaml_contents["description"]
-        profile.extends = yaml_contents.pop("extends", None)
-        selection_entries = required_key(yaml_contents, "selections")
-        if selection_entries:
-            profile._parse_selections(selection_entries)
-        del yaml_contents["selections"]
-        policies = yaml_contents.pop("policies", None)
-        if policies:
-            profile._parse_policies(policies)
+        profile.read_yaml_contents(yaml_contents)
 
         if yaml_contents:
             raise RuntimeError("Unparsed YAML data in '%s'.\n\n%s"
@@ -166,36 +166,28 @@ class Profile(object):
 
     def _parse_selections(self, entries):
         for item in entries:
-            if "." in item:
-                rule, refinement = item.split(".", 1)
-                property_, value = refinement.split("=", 1)
-                if property_ not in XCCDF_REFINABLE_PROPERTIES:
-                    msg = ("Property '{property_}' cannot be refined. "
-                           "Rule properties that can be refined are {refinables}. "
-                           "Fix refinement '{rule_id}.{property_}={value}' in profile '{profile}'."
-                           .format(property_=property_, refinables=XCCDF_REFINABLE_PROPERTIES,
-                                   rule_id=rule, value=value, profile=self.id_)
-                           )
-                    raise ValueError(msg)
-                self.refine_rules[rule].append((property_, value))
-            elif "=" in item:
-                varname, value = item.split("=", 1)
-                self.variables[varname] = value
-            elif item.startswith("!"):
-                self.unselected.append(item[1:])
-            else:
-                self.selected.append(item)
+            self.apply_selection(item)
 
-    def _parse_policies(self, policies_yaml):
-        for item in policies_yaml:
-            id_ = required_key(item, "id")
-            controls = required_key(item, "controls")
-            if not isinstance(controls, list):
-                msg = ("Policy {id_} contains invalid controls list {controls}."
-                    .format(id_=id_, controls=str(controls))
-                    )
+    def apply_selection(self, item):
+        if "." in item:
+            rule, refinement = item.split(".", 1)
+            property_, value = refinement.split("=", 1)
+            if property_ not in XCCDF_REFINABLE_PROPERTIES:
+                msg = ("Property '{property_}' cannot be refined. "
+                       "Rule properties that can be refined are {refinables}. "
+                       "Fix refinement '{rule_id}.{property_}={value}' in profile '{profile}'."
+                       .format(property_=property_, refinables=XCCDF_REFINABLE_PROPERTIES,
+                               rule_id=rule, value=value, profile=self.id_)
+                       )
                 raise ValueError(msg)
-            self.policies[id_] = controls
+            self.refine_rules[rule].append((property_, value))
+        elif "=" in item:
+            varname, value = item.split("=", 1)
+            self.variables[varname] = value
+        elif item.startswith("!"):
+            self.unselected.append(item[1:])
+        else:
+            self.selected.append(item)
 
     def to_xml_element(self):
         element = ET.Element('Profile')
@@ -332,6 +324,137 @@ class Profile(object):
         profile.variables = dict ((k, v) for (k, v) in self.variables.items()
                              if k not in other.variables or v != other.variables[k])
         return profile
+
+
+class ResolvableProfile(Profile):
+    def __init__(self, * args, ** kwargs):
+        super(ResolvableProfile, self).__init__(* args, ** kwargs)
+        self.resolved = False
+        self.resolved_selections = set()
+
+    def _controls_ids_to_controls(self, controls_manager, policy_id, control_id_list):
+        items = [controls_manager.get_control(policy_id, cid) for cid in control_id_list]
+        return items
+
+    def _merge_control(self, control):
+        self.selected.extend(control.rules)
+        for varname, value in control.variables.items():
+            if varname not in self.variables:
+                self.variables[varname] = value
+
+    def resolve_controls(self, controls_manager):
+        pass
+
+    def extend_by(self, extended_profile):
+        extended_selects = set(extended_profile.selected)
+        self.resolved_selections.update(extended_selects)
+
+        updated_variables = dict(extended_profile.variables)
+        updated_variables.update(self.variables)
+        self.variables = updated_variables
+
+        updated_refinements = dict(extended_profile.refine_rules)
+        updated_refinements.update(self.refine_rules)
+        self.refine_rules = updated_refinements
+
+    def resolve(self, all_profiles, controls_manager=None):
+        if self.resolved:
+            return
+
+        self.resolve_controls(controls_manager)
+
+        self.resolved_selections = set(self.selected)
+
+        if self.extends:
+            if self.extends not in all_profiles:
+                msg = (
+                    "Profile {name} extends profile {extended}, but "
+                    "only profiles {known_profiles} are available for resolution."
+                    .format(name=self.id_, extended=self.extends,
+                            known_profiles=list(all_profiles.keys())))
+                raise RuntimeError(msg)
+            extended_profile = all_profiles[self.extends]
+            extended_profile.resolve(all_profiles, controls_manager)
+
+            self.extend_by(extended_profile)
+
+        for uns in self.unselected:
+            self.resolved_selections.discard(uns)
+
+        self.unselected = []
+        self.extends = None
+
+        self.selected = sorted(self.resolved_selections)
+
+        self.resolved = True
+
+
+class ProfileWithSeparatePolicies(ResolvableProfile):
+    def __init__(self, * args, ** kwargs):
+        super(ProfileWithSeparatePolicies, self).__init__(* args, ** kwargs)
+        self.policies = {}
+
+    def read_yaml_contents(self, yaml_contents):
+        policies = yaml_contents.pop("policies", None)
+        if policies:
+            self._parse_policies(policies)
+        super(ProfileWithSeparatePolicies, self).read_yaml_contents(yaml_contents)
+
+    def _parse_policies(self, policies_yaml):
+        for item in policies_yaml:
+            id_ = required_key(item, "id")
+            controls_ids = required_key(item, "controls")
+            if not isinstance(controls_ids, list):
+                if controls_ids != "all":
+                    msg = ("Policy {id_} contains invalid controls list {controls}."
+                        .format(id_=id_, controls=str(controls_ids))
+                        )
+                    raise ValueError(msg)
+            self.policies[id_] = controls_ids
+
+    def resolve_controls(self, controls_manager):
+        for policy_id, controls_ids in self.policies.items():
+            controls = []
+
+            if isinstance(controls_ids, list):
+                controls = self._controls_ids_to_controls(controls_manager, policy_id, controls_ids)
+            elif controls_ids == "all":
+                controls = controls_manager.get_all_controls(policy_id)
+            else:
+                msg = "Unknown policy content {content} in profile {profile_id}".format(content=controls_ids, profile_id=self.id_)
+                raise ValueError(msg)
+
+            for c in controls:
+                self._merge_control(c)
+
+    def extend_by(self, extended_profile):
+        self.policies.update(extended_profile.policies)
+        super(ProfileWithSeparatePolicies, self).extend_by(extended_profile)
+
+
+class ProfileWithInlinePolicies(ResolvableProfile):
+    def __init__(self, * args, ** kwargs):
+        super(ProfileWithInlinePolicies, self).__init__(* args, ** kwargs)
+        self.controls_by_policy = defaultdict(list)
+
+    def apply_selection(self, item):
+        if ":" in item:
+            policy_id, control_id = item.split(":", 1)
+            self.controls_by_policy[policy_id].append(control_id)
+        else:
+            super(ProfileWithInlinePolicies, self).apply_selection(item)
+
+    def resolve_controls(self, controls_manager):
+        for policy_id, controls_ids in self.controls_by_policy.items():
+            controls = []
+
+            if "all" in controls_ids:
+                controls = controls_manager.get_all_controls(policy_id)
+            else:
+                controls = self._controls_ids_to_controls(controls_manager, policy_id, controls_ids)
+
+            for c in controls:
+                self._merge_control(c)
 
 
 class Value(object):

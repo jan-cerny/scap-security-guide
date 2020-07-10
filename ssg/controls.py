@@ -77,6 +77,8 @@ class ControlsManager():
         self.policies = {}
 
     def load(self):
+        if not os.path.exists(self.controls_dir):
+            return
         for filename in os.listdir(self.controls_dir):
             logging.info("Found file %s" % (filename))
             filepath = os.path.join(self.controls_dir, filename)
@@ -92,3 +94,11 @@ class ControlsManager():
             raise ValueError(msg)
         control = policy.get_control(control_id)
         return control
+
+    def get_all_controls(self, policy_id):
+        try:
+            policy = self.policies[policy_id]
+        except KeyError:
+            msg = "policy '%s' doesn't exist" % (policy_id)
+            raise ValueError(msg)
+        return policy.controls.values()

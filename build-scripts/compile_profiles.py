@@ -6,49 +6,7 @@ import os.path
 from glob import glob
 
 import ssg.build_yaml
-
-
-class ResolvableProfile(ssg.build_yaml.Profile):
-    def __init__(self, * args, ** kwargs):
-        super(ResolvableProfile, self).__init__(* args, ** kwargs)
-        self.resolved = False
-
-    def resolve(self, all_profiles):
-        if self.resolved:
-            return
-
-        resolved_selections = set(self.selected)
-        if self.extends:
-            if self.extends not in all_profiles:
-                msg = (
-                    "Profile {name} extends profile {extended}, but"
-                    "only profiles {known_profiles} are available for resolution."
-                    .format(name=self.id_, extended=self.extends,
-                            profiles=list(all_profiles.keys())))
-                raise RuntimeError(msg)
-            extended_profile = all_profiles[self.extends]
-            extended_profile.resolve(all_profiles)
-
-            extended_selects = set(extended_profile.selected)
-            resolved_selections.update(extended_selects)
-
-            updated_variables = dict(extended_profile.variables)
-            updated_variables.update(self.variables)
-            self.variables = updated_variables
-
-            updated_refinements = dict(extended_profile.refine_rules)
-            updated_refinements.update(self.refine_rules)
-            self.refine_rules = updated_refinements
-
-        for uns in self.unselected:
-            resolved_selections.discard(uns)
-
-        self.unselected = []
-        self.extends = None
-
-        self.selected = sorted(resolved_selections)
-
-        self.resolved = True
+import ssg.controls
 
 
 def create_parser():
@@ -70,6 +28,11 @@ def create_parser():
         "--output", "-o", default="{name}.profile",
         help="The template for saving processed profile files."
     )
+    parser.add_argument(
+        "--controls-dir",
+        help="Directory that contains control files with policy controls. "
+        "e.g.: ~/scap-security-guide/controls",
+    )
     return parser
 
 
@@ -77,7 +40,7 @@ def make_name_to_profile_mapping(profile_files, env_yaml):
     name_to_profile = {}
     for f in profile_files:
         try:
-            p = ResolvableProfile.from_yaml(f, env_yaml)
+            p = ssg.build_yaml.ResolvableProfile.from_yaml(f, env_yaml)
             name_to_profile[p.id_] = p
         except Exception as exc:
             # The profile is probably doc-incomplete
@@ -110,11 +73,15 @@ def main():
     args = parser.parse_args()
     env_yaml = get_env_yaml(args.build_config_yaml, args.product_yaml)
 
+    if args.controls_dir:
+        controls_manager = ssg.controls.ControlsManager(args.controls_dir, env_yaml)
+        controls_manager.load()
+
     profile_files = get_profile_files_from_root(env_yaml, args.product_yaml)
     profile_files.extend(args.profile_file)
     profiles = make_name_to_profile_mapping(profile_files, env_yaml)
     for pname in profiles:
-        profiles[pname].resolve(profiles)
+        profiles[pname].resolve(profiles, controls_manager)
 
     for name, p in profiles.items():
         p.dump_yaml(args.output.format(name=name))
