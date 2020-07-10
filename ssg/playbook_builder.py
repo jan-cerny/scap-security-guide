@@ -30,6 +30,33 @@ class PlaybookBuilder():
         additional_content_directories = product_yaml.get("additional_content_directories", [])
         self.add_content_dirs = [os.path.abspath(os.path.join(product_dir, rd)) for rd in additional_content_directories]
 
+    def get_profile_selections(self, profile):
+        """
+        Provides a tuple (rules, variables) where rules is a list of rules
+        selected in the profile and variables is a dictionary of
+        variables and their values in the profile. The method can handle
+        profiles which extend other profiles.
+        """
+        rules = []
+        variables = dict()
+        if profile.extends:
+            extended_profile_path = os.path.join(
+                self.profiles_dir, profile.extends + ".profile")
+            try:
+                extended_profile = ssg.build_yaml.ProfileWithInlinePolicies.from_yaml(
+                    extended_profile_path)
+            except ssg.yaml.DocumentationNotComplete:
+                sys.stderr.write("Skipping incomplete profile %s.\n" % extended_profile_path)
+                return None
+            if not profile:
+                sys.stderr.write(
+                    "Could not parse profile %s.\n" % extended_profile_path)
+                return None
+            rules, variables = self.get_profile_selections(extended_profile)
+        rules.extend(profile.get_rule_selectors())
+        variables.update(profile.get_variable_selectors())
+        return rules, variables
+
     def choose_variable_value(self, var_id, variables, refinements):
         """
         Determine value of variable based on profile refinements.
@@ -173,7 +200,7 @@ class PlaybookBuilder():
                 % (profile_path, ext)
             )
 
-        profile = ssg.build_yaml.Profile.from_yaml(profile_path)
+        profile = ssg.build_yaml.ProfileWithInlinePolicies.from_yaml(profile_path)
         if not profile:
             raise RuntimeError("Could not parse profile %s.\n" % profile_path)
         return profile
