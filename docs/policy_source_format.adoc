@@ -142,6 +142,17 @@ will define a “High” profile built from the controls.
 
 We can order the alignment in the same way as the source policy.
 
+There are 2 possible formats:
+
+* Profile with separate policies
+* Profile with inline policies
+
+=== Profile with separate policies
+
+A new key `policies` is added to the profile file. In this format, the items of
+`policies` list are dictionaries with 2 members: `id` is a policy ID and
+`controls` is a list of control IDs from the policy specified by `id`.
+
 ----
 $ cat rhel8/profiles/abcd-high.profile
  
@@ -169,7 +180,7 @@ that all controls will be selected. Let’s show how it will be easier:
 
 ----
 $ cat rhel8/profiles/abcd-high.profile
- 
+
 documentation_complete: true
 title: ABCD High for Red Hat Enterprise Linux 8
 description: |-
@@ -179,6 +190,48 @@ policies:
 - id: abcd
   controls: all
 selections:
+  - security_patches_uptodate
+----
+
+=== Profile with inline policies
+
+In this format, no new key is added to the YAML file. But, the controls can be
+inserted to the `selections` list. The items of `selections` list that specify
+controls are tuples that consists of a policy ID and a control ID separated by a
+colon. The `selections` list can still contain rule IDs and variables.
+
+----
+$ cat rhel8/profiles/abcd-high.profile
+
+documentation_complete: true
+title: ABCD High for Red Hat Enterprise Linux 8
+description: |-
+  This profile contains configuration checks that align to
+  the ABCD benchmark.
+selections:
+  - abcd:R1
+  - abcd:R2
+  - abcd:R3
+  - security_patches_uptodate
+----
+
+In a similar way, we could define a “Low” profile that selects only some of the
+requirements.
+
+In the example we have selected all controls from `controls/abcd.yml` by listing
+them explicitly. It is possible to shorten it using the `all”`value which means
+that all controls will be selected. Let’s show how it will be easier:
+
+----
+$ cat rhel8/profiles/abcd-high.profile
+
+documentation_complete: true
+title: ABCD High for Red Hat Enterprise Linux 8
+description: |-
+  This profile contains configuration checks that align to
+  the ABCD benchmark.
+selections:
+  - abcd:all
   - security_patches_uptodate
 ----
 
