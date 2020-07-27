@@ -54,8 +54,17 @@ controls:
       and to use the targeted policy.
 ----
 
-Title and description elements can be optional. In future, we can introduce more
-metadata keys if we find it convenient.
+The `policy` key is the title of the policy. The `id` is a short identifier of
+the policy, `id` will be used for references in porfile files (see chapter Using
+controls in profiles). The `version`element represents the version of the policy
+represented in this file. The `source` element contains a URL of the original
+policy document.
+
+The `controls` list contains a list of controls. Each item of this list
+represents a control from the policy document. Each control has an `id`
+identifier which is unique within the policy. The `title` and `description`
+elements can be optional. In future, we can introduce more metadata keys if we
+find it convenient.
 
 In the real world, controls (requirements) can be nested. For example, PCI-DSS
 has tree structure, within requirement 2.3 we can find 2.3.a, 2.3.b, etc.
